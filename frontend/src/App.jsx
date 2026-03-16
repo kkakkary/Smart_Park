@@ -811,13 +811,12 @@ function ChatPanel() {
 
 // ── Main App ───────────────────────────────────────────────────────────────────
 export default function App() {
-  const [mode, setMode] = useState("find"); // "find" | "chat"
   const [query, setQuery] = useState("");
   const [areas, setAreas] = useState([]);
   const [selectedNeighborhood, setSelectedNeighborhood] = useState(null);
   const [meters, setMeters] = useState([]);       // search results for left panel
   const [mapMeters, setMapMeters] = useState([]); // all area meters for map
-  const [recommendation, setRecommendation] = useState("");
+  const [chatHistory, setChatHistory] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedMeter, setSelectedMeter] = useState(null);
   const [usingSampleData, setUsingSampleData] = useState(false);
@@ -860,7 +859,7 @@ export default function App() {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           setMeters(data);
-          setRecommendation("");
+          setChatHistory([]);
           setUsingSampleData(false);
         }
       }
@@ -870,14 +869,14 @@ export default function App() {
   const handleLocationClear = useCallback(() => {
     setUserLocation(null);
     setMeters([]);
-    setRecommendation("");
+    setChatHistory([]);
   }, []);
 
   const handleAreaSelect = useCallback((area) => {
     setUserLocation(null);      // clear address pin — area is now the active location
     setSelectedNeighborhood(area);
     setMeters([]);
-    setRecommendation("");
+    setChatHistory([]);
   }, []);
 
   // Load areas from API on mount
@@ -912,107 +911,61 @@ export default function App() {
     setSelectedMeter(null);
   }, [selectedNeighborhood, selectedDow, selectedHour]);
 
-  const handleSearch = useCallback(async () => {
-    if (!query.trim()) return;
+  const handleSearch = useCallback(async (overrideQuery) => {
+    const q = (overrideQuery || query).trim();
+    if (!q) return;
     setLoading(true);
     setSelectedMeter(null);
     setResolvedLocation(null);
 
-    // Step 1: resolve location AND day/time from the natural language query
-    let targetArea = selectedNeighborhood;
-    let queryResolvedNewLocation = false;
-    // Use local effective dow/hour so stale closure values don't bleed into the fetch
-    let effectiveDow = selectedDow;
-    let effectiveHour = selectedHour;
+    // Optimistically append user message to chat
+    const userMsg = { role: "user", content: q };
+    setChatHistory((prev) => [...prev, userMsg]);
+    if (!overrideQuery) setQuery("");
+
     try {
-      const locRes = await fetch(`${API_BASE}/resolve-location`, {
+      const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
-      });
-      if (locRes.ok) {
-        const locData = await locRes.json();
-        if (locData.area) {
-          targetArea = locData.area;
-          queryResolvedNewLocation = true;
-          setResolvedLocation(locData);
-          const matched = areas.find((a) => a.name === locData.area.name) || locData.area;
-          setSelectedNeighborhood(matched);
-          // Clear pinned address — resolved area is now the active location
-          setUserLocation(null);
-        }
-        // Apply day/time if Claude extracted them from the query
-        if (locData.dow != null) {
-          effectiveDow = locData.dow;
-          setSelectedDow(locData.dow);
-        }
-        if (locData.hour != null) {
-          effectiveHour = locData.hour;
-          setSelectedHour(locData.hour);
-        }
-      }
-    } catch {
-      // If resolve fails, fall through with current values
-    }
-
-    if (!targetArea) {
-      setLoading(false);
-      return;
-    }
-
-    // If this query resolved a new location, use targetArea coords directly —
-    // userLocation in the closure is stale (setUserLocation(null) above doesn't
-    // update the closure value until the next render).
-    const effectiveLat = queryResolvedNewLocation ? targetArea.lat : (userLocation?.lat ?? targetArea.lat);
-    const effectiveLon = queryResolvedNewLocation ? targetArea.lon : (userLocation?.lon ?? targetArea.lon);
-
-    // Step 2: fetch fresh area meters for the resolved location AND time —
-    // must await this before calling Claude so it has the correct context.
-    let freshMeters = [];
-    try {
-      const metersRes = await fetch(
-        `${API_BASE}/meters/area?lat=${effectiveLat}&lon=${effectiveLon}&radius_m=1500&limit=500&dow=${effectiveDow}&hour=${effectiveHour}`
-      );
-      if (metersRes.ok) {
-        const metersData = await metersRes.json();
-        if (Array.isArray(metersData) && metersData.length > 0) {
-          freshMeters = metersData;
-          setMapMeters(freshMeters);
-        }
-      }
-    } catch { /* fall through with empty freshMeters */ }
-
-    // Step 3: call Claude with fully-resolved location, time, and meter context
-    try {
-      const res = await fetch(`${API_BASE}/find-parking`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query,
-          lat: effectiveLat,
-          lon: effectiveLon,
-          radius_m: 500,
-          dow: effectiveDow,
-          hour: effectiveHour,
-          meters: freshMeters.length > 0 ? freshMeters : undefined,
-        }),
+        body: JSON.stringify({ message: q, history: chatHistory }),
       });
 
       if (!res.ok) throw new Error("API error");
       const data = await res.json();
-      setMeters(data.meters);
-      setRecommendation(data.recommendation);
+
+      // Update chat history with assistant reply
+      setChatHistory(data.history);
+
+      // If Claude found meters, update the map
+      if (data.meters && data.meters.length > 0) {
+        setMeters(data.meters);
+        setMapMeters(data.meters);
+        setUsingSampleData(false);
+        // Update time selectors if Claude inferred day/time
+        if (data.query_time) {
+          setSelectedDow(data.query_time.dow);
+          setSelectedHour(data.query_time.hour);
+        }
+        // Pan map to location if returned
+        if (data.location) {
+          const nearest = areas.reduce((best, a) => {
+            if (!a.lat) return best;
+            const d = (a.lat - data.location.lat) ** 2 + (a.lon - data.location.lon) ** 2;
+            return !best || d < best.d ? { area: a, d } : best;
+          }, null)?.area;
+          if (nearest) setSelectedNeighborhood(nearest);
+        }
+      } else if (!data.meters || data.meters.length === 0) {
+        // Analytical answer — keep existing map, no meter update needed
+      }
       setUsingSampleData(false);
     } catch {
-      // Fall back to sample data for demo
-      const sampleMeters = generateSampleMeters(targetArea.lat, targetArea.lon);
-      setMeters(sampleMeters);
-      setRecommendation(SAMPLE_RECOMMENDATION);
+      setChatHistory((prev) => [...prev, { role: "assistant", content: "Something went wrong — is the backend running?" }]);
       setUsingSampleData(true);
     } finally {
       setLoading(false);
     }
-  }, [query, selectedNeighborhood, userLocation, selectedDow, selectedHour]);
+  }, [query, chatHistory, areas, selectedNeighborhood]);
 
   // Selecting a meter — unified handler for both list and map clicks
   const handleSelectMeter = useCallback((m) => {
@@ -1029,6 +982,8 @@ export default function App() {
     "Dinner in Little Italy",
     "Weekend brunch Hillcrest",
     "Quick errand downtown",
+    "Which area has the highest citation risk?",
+    "Best parking in the city right now",
   ];
 
   return (
@@ -1088,23 +1043,8 @@ export default function App() {
           borderRight: "1px solid rgba(255,255,255,0.07)",
           padding: "20px",
           display: "flex", flexDirection: "column", gap: 16,
-          overflowY: mode === "find" ? "auto" : "hidden",
+          overflowY: "auto",
         }}>
-          {/* Mode switcher */}
-          <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: 4 }}>
-            {[["find", "FIND PARKING"], ["chat", "ASK CLAUDE"]].map(([m, label]) => (
-              <button key={m} onClick={() => setMode(m)} style={{
-                flex: 1, padding: "7px 0", borderRadius: 6, fontSize: 10, letterSpacing: "0.06em",
-                cursor: "pointer", border: "none",
-                background: mode === m ? "rgba(59,130,246,0.7)" : "transparent",
-                color: mode === m ? "#fff" : "rgba(255,255,255,0.4)",
-                fontFamily: "inherit",
-              }}>{label}</button>
-            ))}
-          </div>
-
-          {mode === "chat" && <ChatPanel />}
-          {mode === "find" && <>
           {/* Location Search — top of panel */}
           <div>
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 8, letterSpacing: "0.08em" }}>
@@ -1239,7 +1179,7 @@ export default function App() {
               {QUICK.map((q) => (
                 <button
                   key={q}
-                  onClick={() => { setQuery(q); }}
+                  onClick={() => handleSearch(q)}
                   style={{
                     fontSize: 9, padding: "3px 8px", borderRadius: 4,
                     background: "rgba(255,255,255,0.03)",
@@ -1278,58 +1218,32 @@ export default function App() {
             )}
           </div>
 
-          {/* AI Recommendation */}
-          {(loading || recommendation) && (
-            <div style={{
-              padding: "14px 16px",
-              background: "rgba(59,130,246,0.07)",
-              border: `1px solid ${loading ? "rgba(59,130,246,0.15)" : "rgba(59,130,246,0.2)"}`,
-              borderRadius: 10,
-            }}>
-              <div style={{
-                fontSize: 9, letterSpacing: "0.1em",
-                color: "#60a5fa", marginBottom: 8, fontWeight: 600,
-                display: "flex", alignItems: "center", gap: 6,
-              }}>
-                ✦ CLAUDE RECOMMENDATION
+          {/* Conversation thread */}
+          {(loading || chatHistory.length > 0) && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 400, overflowY: "auto" }}>
+              <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "#60a5fa", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                ✦ CLAUDE
                 {loading && (
                   <span style={{ display: "inline-flex", gap: 3, marginLeft: 2 }}>
                     {[0, 1, 2].map((i) => (
-                      <span key={i} style={{
-                        width: 4, height: 4, borderRadius: "50%",
-                        background: "#60a5fa",
-                        animation: "pulse 1.2s ease-in-out infinite",
-                        animationDelay: `${i * 0.2}s`,
-                        display: "inline-block",
-                      }} />
+                      <span key={i} style={{ width: 4, height: 4, borderRadius: "50%", background: "#60a5fa", animation: "pulse 1.2s ease-in-out infinite", animationDelay: `${i * 0.2}s`, display: "inline-block" }} />
                     ))}
                   </span>
                 )}
               </div>
-              {loading ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {[1, 0.7, 0.5].map((opacity, i) => (
-                    <div key={i} style={{
-                      height: 10, borderRadius: 4,
-                      background: `rgba(96,165,250,${opacity * 0.15})`,
-                      width: `${[92, 78, 55][i]}%`,
-                      animation: "pulse 1.2s ease-in-out infinite",
-                      animationDelay: `${i * 0.15}s`,
-                    }} />
-                  ))}
-                </div>
-              ) : (
-                <div style={{ fontSize: 12 }}>
-                  <MarkdownText text={recommendation} />
-                </div>
-              )}
-              {!loading && usingSampleData && (
-                <div style={{
-                  fontSize: 9, color: "rgba(255,255,255,0.3)",
-                  marginTop: 8, borderTop: "1px solid rgba(255,255,255,0.06)",
-                  paddingTop: 8
+              {chatHistory.map((msg, i) => (
+                <div key={i} style={{
+                  padding: "10px 12px", borderRadius: 10, fontSize: 12, lineHeight: 1.65,
+                  background: msg.role === "user" ? "rgba(255,255,255,0.04)" : "rgba(59,130,246,0.07)",
+                  border: `1px solid ${msg.role === "user" ? "rgba(255,255,255,0.07)" : "rgba(59,130,246,0.2)"}`,
+                  color: msg.role === "user" ? "rgba(255,255,255,0.5)" : "#e2e8f0",
                 }}>
-                  ⚠ Demo mode — start backend for live data
+                  {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : msg.content}
+                </div>
+              ))}
+              {loading && (
+                <div style={{ padding: "10px 14px", borderRadius: 10, background: "rgba(59,130,246,0.07)", border: "1px solid rgba(59,130,246,0.15)", display: "flex", gap: 5 }}>
+                  {[0, 0.2, 0.4].map((d) => (<div key={d} style={{ width: 6, height: 6, borderRadius: "50%", background: "#60a5fa", animation: "pulse 1.2s ease-in-out infinite", animationDelay: `${d}s` }} />))}
                 </div>
               )}
             </div>
@@ -1362,7 +1276,6 @@ export default function App() {
               </div>
             </div>
           )}
-          </>}
         </div>
 
         {/* Right Panel — Map */}

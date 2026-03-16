@@ -298,6 +298,31 @@ def compute_area_stats(dow: int, hour: int) -> list:
 
 CHAT_TOOLS = [
     {
+        "name": "find_parking_near",
+        "description": (
+            "Find available parking meters near a San Diego location. Use this whenever the user asks "
+            "where to park, mentions a destination, event, or neighbourhood. "
+            "You know San Diego geography — provide lat/lon from your knowledge "
+            "(e.g. Petco Park: 32.7073, -117.1566; Little Italy: 32.7249, -117.1699; "
+            "Balboa Park: 32.7341, -117.1446; Gaslamp: 32.7115, -117.1601; "
+            "Old Town: 32.7539, -117.1968; Hillcrest: 32.7462, -117.1638; "
+            "Mission Beach: 32.7677, -117.2531; Pacific Beach: 32.7955, -117.2524; "
+            "Downtown: 32.7157, -117.1611)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lat":       {"type": "number",  "description": "Latitude of destination."},
+                "lon":       {"type": "number",  "description": "Longitude of destination."},
+                "location_name": {"type": "string", "description": "Human-readable name of the destination."},
+                "dow":       {"type": "integer", "description": "Day of week 0=Mon…6=Sun. Omit for current."},
+                "hour":      {"type": "integer", "description": "Hour 0-23. Omit for current."},
+                "radius_m":  {"type": "integer", "description": "Search radius in metres (default 500)."},
+            },
+            "required": ["lat", "lon"],
+        },
+    },
+    {
         "name": "get_city_overview",
         "description": "Get availability and citation stats for every neighbourhood in San Diego at a given day/time. Use this to compare areas or answer city-wide questions.",
         "input_schema": {
@@ -347,10 +372,26 @@ CHAT_TOOLS = [
 ]
 
 
-def execute_tool(name: str, inputs: dict) -> dict:
+def execute_tool(name: str, inputs: dict, _state: dict) -> dict:
+    """Execute a tool. _state is a mutable dict for passing side-effects (e.g. meters) back to the caller."""
     now  = datetime.now()
     dow  = inputs.get("dow",  now.weekday())
     hour = inputs.get("hour", now.hour)
+
+    if name == "find_parking_near":
+        lat      = inputs["lat"]
+        lon      = inputs["lon"]
+        radius_m = inputs.get("radius_m", 500)
+        meters   = find_nearby_meters(lat, lon, radius_m, limit=20, dow=dow, hour=hour)
+        _state["meters"]     = meters
+        _state["query_time"] = {"dow": dow, "hour": hour}
+        _state["location"]   = {"lat": lat, "lon": lon, "name": inputs.get("location_name", "")}
+        summary = [
+            f"- {m.get('street_address', m['meter_id'])} | {int(m['availability']*100)}% avail | "
+            f"citation risk {int((m.get('citation_prob') or 0)*100)}% | {m.get('rate_range','')}"
+            for m in meters[:10]
+        ]
+        return {"meter_count": len(meters), "dow": dow, "hour": hour, "meters_summary": summary}
 
     if name == "get_city_overview":
         stats = compute_area_stats(dow, hour)
@@ -568,17 +609,19 @@ def meters_in_area(lat: float, lon: float, radius_m: int = 1000, limit: int = 40
 
 @app.post("/chat")
 async def chat(req: ChatQuery):
-    """Agentic chat endpoint — Claude uses tools to query live parking data and answer any question."""
+    """Unified agentic endpoint — handles parking searches and analytical questions."""
     SYSTEM = (
-        "You are SD Smart Park, an AI analyst with access to real San Diego parking data "
+        "You are SD Smart Park, an AI assistant with access to real San Diego parking data "
         f"covering {len(METERS):,} meters across {len(AREAS)} neighbourhoods. "
-        "Use your tools to look up data before answering — never guess numbers. "
-        "Be concise, specific, and conversational. When you cite stats, pull them from tool results."
+        "When a user asks where to park or mentions a destination, always call find_parking_near first. "
+        "For analytical questions (risk, comparisons, stats), use the analysis tools. "
+        "Never guess numbers — always use tools. Be concise and specific."
     )
 
     messages = list(req.history) + [{"role": "user", "content": req.message}]
+    state: dict = {}  # collects side-effects from tools (meters, location, etc.)
 
-    for _ in range(6):  # max 6 tool-use rounds
+    for _ in range(8):  # max 8 tool-use rounds
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
@@ -594,7 +637,7 @@ async def chat(req: ChatQuery):
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    result = execute_tool(block.name, block.input)
+                    result = execute_tool(block.name, block.input, state)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -606,9 +649,14 @@ async def chat(req: ChatQuery):
             break
 
     text = next((b.text for b in response.content if hasattr(b, "text")), "No response generated.")
-    # Return updated history (stripped of tool internals) for multi-turn use
     history_out = list(req.history) + [
         {"role": "user", "content": req.message},
         {"role": "assistant", "content": text},
     ]
-    return {"response": text, "history": history_out}
+    return {
+        "response": text,
+        "history": history_out,
+        "meters": state.get("meters", []),
+        "query_time": state.get("query_time"),
+        "location": state.get("location"),
+    }
