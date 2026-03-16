@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SD Smart Park</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { background: #080f18; }
+
+      /* Dark Leaflet tooltip to match app theme */
+      .leaflet-tooltip {
+        background: rgba(8, 15, 24, 0.96) !important;
+        border: 1px solid rgba(255,255,255,0.12) !important;
+        color: #e2e8f0 !important;
+        border-radius: 8px !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+        padding: 8px 12px !important;
+        font-family: 'DM Mono', 'Fira Code', 'Courier New', monospace !important;
+      }
+      .leaflet-tooltip::before { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

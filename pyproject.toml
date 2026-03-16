@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "sd-smart-park"
+version = "0.1.0"
+description = "SD Smart Parking — Claude AI x City of San Diego Hackathon"
+authors = []
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# Data preprocessing (scripts/)
+pandas = "^2.2"
+numpy = "^2.0"
+requests = "^2.32"
+
+# Backend (backend/)
+fastapi = "^0.115"
+uvicorn = {extras = ["standard"], version = "^0.32"}
+anthropic = "^0.40"
+python-dotenv = "^1.0"
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
