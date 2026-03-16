@@ -340,13 +340,89 @@ def generate_sample_scores():
 
 
 
+def build_citation_hotspots():
+    """
+    Build a citation density grid from meter locations + availability scores.
+    Snaps each meter to a ~220m grid cell and aggregates citation probability.
+    Writes citation_hotspots.json.
+    """
+    print("\n[3/3] Building citation hotspots...")
+
+    locations_path = os.path.join(DATA_DIR, "meter_locations.json")
+    scores_path = os.path.join(DATA_DIR, "availability_scores.json")
+
+    if not os.path.exists(locations_path) or not os.path.exists(scores_path):
+        print("  Skipping — meter_locations.json or availability_scores.json not found")
+        return
+
+    with open(locations_path) as f:
+        locations = json.load(f)
+    with open(scores_path) as f:
+        scores = json.load(f)
+
+    GRID = 0.002  # ~220m grid cells
+
+    cells = defaultdict(lambda: {"citation_probs": [], "avg_fines": []})
+
+    for meter in locations:
+        mid = str(meter.get("meter_id", ""))
+        lat = meter.get("lat")
+        lon = meter.get("lon")
+        if lat is None or lon is None:
+            continue
+
+        score_data = scores.get(mid, {})
+        citation_prob = score_data.get("citation_prob", 0.0) if isinstance(score_data, dict) else 0.0
+        avg_fine = score_data.get("avg_fine", 0.0) if isinstance(score_data, dict) else 0.0
+
+        if citation_prob <= 0:
+            continue
+
+        cell_lat = round(round(lat / GRID) * GRID, 4)
+        cell_lon = round(round(lon / GRID) * GRID, 4)
+        cells[(cell_lat, cell_lon)]["citation_probs"].append(citation_prob)
+        cells[(cell_lat, cell_lon)]["avg_fines"].append(avg_fine)
+
+    if not cells:
+        print("  No citation data — writing empty hotspots")
+        with open(os.path.join(DATA_DIR, "citation_hotspots.json"), "w") as f:
+            json.dump([], f)
+        return
+
+    hotspots = []
+    for (lat, lon), data in cells.items():
+        probs = data["citation_probs"]
+        fines = [x for x in data["avg_fines"] if x]
+        avg_prob = sum(probs) / len(probs)
+        hotspots.append({
+            "lat": lat,
+            "lon": lon,
+            "count": len(probs),
+            "avg_citation_prob": round(avg_prob, 4),
+            "avg_fine": round(sum(fines) / len(fines), 2) if fines else 0.0,
+        })
+
+    # Normalize density 0–1 and filter noise
+    max_prob = max(h["avg_citation_prob"] for h in hotspots) or 1.0
+    for h in hotspots:
+        h["density"] = round(h["avg_citation_prob"] / max_prob, 3)
+
+    hotspots = [h for h in hotspots if h["avg_citation_prob"] > 0.02]
+    hotspots.sort(key=lambda h: -h["density"])
+
+    with open(os.path.join(DATA_DIR, "citation_hotspots.json"), "w") as f:
+        json.dump(hotspots, f)
+
+    print(f"  ✓ Built {len(hotspots):,} citation hotspot cells")
+
+
 def main():
     print("=" * 50)
     print("SD Smart Parking — Data Preprocessor")
     print("=" * 50)
 
     # ── Step 1 & 2: Meter locations + availability scores ──────────────────────
-    if os.path.exists(LOCAL_CSV):
+    if os.path.exists(LOCAL_CSV) and not os.environ.get("SKIP_LOCAL_CSV"):
         print(f"\nFound local CSV: {LOCAL_CSV}")
         print("  Loading...")
         local_df = pd.read_csv(LOCAL_CSV)
@@ -377,10 +453,21 @@ def main():
 
         process_transactions([tx_2024, tx_2025])
 
+    build_citation_hotspots()
+
     print("\n✅ All done! Data written to /data/")
     print("   meter_locations.json")
     print("   availability_scores.json  (includes citation_prob + avg_fine per meter)")
+    print("   citation_hotspots.json    (grid-aggregated citation risk overlay)")
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force-soda", action="store_true",
+                        help="Skip local CSV and always download fresh data from SODA API")
+    args = parser.parse_args()
+    if args.force_soda and os.path.exists(LOCAL_CSV):
+        print("--force-soda: skipping local CSV, downloading from SODA API...")
+        os.environ["SKIP_LOCAL_CSV"] = "1"
     main()

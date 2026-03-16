@@ -1,9 +1,10 @@
 [tool.poetry]
 name = "sd-smart-park"
 version = "0.1.0"
-description = "SD Smart Parking — Claude AI x City of San Diego Hackathon"
+description = "SD Smart Park — AI-powered parking recommendations for San Diego"
 authors = []
 readme = "README.md"
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.11"

@@ -9,9 +9,13 @@ Run:
     uvicorn main:app --reload --port 8000
 """
 
+import asyncio
 import json
 import os
 import math
+import subprocess
+import sys
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException
@@ -26,7 +30,54 @@ load_dotenv()
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-app = FastAPI(title="SD Smart Parking API")
+REFRESH_INTERVAL_HOURS = 24
+LAST_REFRESHED: Optional[str] = None
+
+
+def run_preprocess():
+    """Re-download from SODA and rebuild JSON data files."""
+    script = os.path.join(os.path.dirname(__file__), "..", "scripts", "preprocess.py")
+    result = subprocess.run(
+        [sys.executable, script, "--force-soda"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr)
+    return result.stdout
+
+
+def reload_data():
+    """Hot-reload in-memory data from JSON files after a refresh."""
+    global METERS, AVAILABILITY, HOTSPOTS, AREAS, LAST_REFRESHED
+    METERS = load_json("meter_locations.json")
+    AVAILABILITY = load_json("availability_scores.json")
+    HOTSPOTS = load_json("citation_hotspots.json")
+    AREAS = _build_areas()
+    LAST_REFRESHED = datetime.now().isoformat()
+    print(f"Data reloaded: {len(METERS):,} meters, {len(AVAILABILITY):,} availability records, {len(HOTSPOTS):,} hotspot cells")
+
+
+async def auto_refresh_loop():
+    """Background task: refresh data from SODA every REFRESH_INTERVAL_HOURS."""
+    while True:
+        await asyncio.sleep(REFRESH_INTERVAL_HOURS * 3600)
+        print(f"Auto-refresh starting...")
+        try:
+            output = run_preprocess()
+            reload_data()
+            print(f"Auto-refresh complete.")
+        except Exception as e:
+            print(f"Auto-refresh failed: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(auto_refresh_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="SD Smart Parking API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,8 +97,9 @@ def load_json(filename):
 
 METERS: list = load_json("meter_locations.json")
 AVAILABILITY: dict = load_json("availability_scores.json")
+HOTSPOTS: list = load_json("citation_hotspots.json")
 
-print(f"Loaded {len(METERS):,} meters, {len(AVAILABILITY):,} availability records")
+print(f"Loaded {len(METERS):,} meters, {len(AVAILABILITY):,} availability records, {len(HOTSPOTS):,} hotspot cells")
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def haversine(lat1, lon1, lat2, lon2) -> float:
@@ -208,6 +260,11 @@ class LocationQuery(BaseModel):
     query: str
 
 
+class ChatQuery(BaseModel):
+    message: str
+    history: Optional[list] = []  # list of {role, content} for multi-turn
+
+
 @app.post("/resolve-location")
 async def resolve_location(req: LocationQuery):
     """Use Claude to extract destination coordinates and optional day/time, then find nearest area."""
@@ -276,7 +333,29 @@ If no specific day or time is mentioned, use null for dow and hour."""
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "meters_loaded": len(METERS)}
+    return {
+        "status": "ok",
+        "meters_loaded": len(METERS),
+        "last_refreshed": LAST_REFRESHED,
+        "next_refresh_in_hours": REFRESH_INTERVAL_HOURS,
+    }
+
+
+@app.post("/refresh")
+async def manual_refresh():
+    """Manually trigger a SODA data refresh."""
+    try:
+        output = run_preprocess()
+        reload_data()
+        return {"status": "ok", "last_refreshed": LAST_REFRESHED, "meters_loaded": len(METERS)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/citation-hotspots")
+def citation_hotspots():
+    """Return citation risk hotspot grid cells for map overlay."""
+    return HOTSPOTS
 
 
 @app.get("/areas")

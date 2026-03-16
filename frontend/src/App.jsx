@@ -301,7 +301,7 @@ function MapController({ centerLat, centerLon, selectedMeter, userLocation }) {
   return null;
 }
 
-function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter, userLocation }) {
+function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter, userLocation, hotspots = [], showHotspots = false }) {
   return (
     <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
       <MapContainer
@@ -318,6 +318,28 @@ function ParkingMap({ meters, centerLat, centerLon, onSelectMeter, selectedMeter
         />
 
         <MapController centerLat={centerLat} centerLon={centerLon} selectedMeter={selectedMeter} userLocation={userLocation} />
+
+        {/* Citation hotspot overlay — rendered first so meter dots appear on top */}
+        {showHotspots && hotspots.map((h, i) => (
+          <CircleMarker
+            key={`hs-${i}`}
+            center={[h.lat, h.lon]}
+            radius={12 + h.density * 22}
+            fillColor="#ef4444"
+            color="transparent"
+            fillOpacity={0.08 + h.density * 0.22}
+            interactive={true}
+          >
+            <Tooltip sticky>
+              <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                <div style={{ fontWeight: 700, color: "#ef4444" }}>Citation Hotspot</div>
+                <div>Risk: {Math.round(h.avg_citation_prob * 100)}%</div>
+                {h.avg_fine > 0 && <div>Avg fine: ${Math.round(h.avg_fine)}</div>}
+                <div style={{ color: "rgba(255,255,255,0.4)" }}>{h.count} meter{h.count !== 1 ? "s" : ""} in zone</div>
+              </div>
+            </Tooltip>
+          </CircleMarker>
+        ))}
 
         {/* User location pin */}
         {userLocation && (
@@ -705,6 +727,8 @@ export default function App() {
   const isNow = selectedDow === nowDow && selectedHour === nowHour;
 
   const [userLocation, setUserLocation] = useState(null); // { lat, lon, label }
+  const [hotspots, setHotspots] = useState([]);
+  const [showHotspots, setShowHotspots] = useState(false);
 
   const handleLocationSelect = useCallback(async (loc) => {
     setUserLocation(loc);
@@ -758,6 +782,14 @@ export default function App() {
           setSelectedNeighborhood(data[0]);
         }
       })
+      .catch(() => {});
+  }, []);
+
+  // Load citation hotspots once on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/citation-hotspots`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => { if (Array.isArray(data)) setHotspots(data); })
       .catch(() => {});
   }, []);
 
@@ -1219,7 +1251,7 @@ export default function App() {
           </div>
 
           {/* Legend */}
-          <div style={{ display: "flex", gap: 20 }}>
+          <div style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
             {[
               { color: "#22c55e", label: "Likely Available (65%+)" },
               { color: "#f59e0b", label: "Moderate (35-65%)" },
@@ -1230,6 +1262,21 @@ export default function App() {
                 {label}
               </div>
             ))}
+            {hotspots.length > 0 && (
+              <button
+                onClick={() => setShowHotspots((v) => !v)}
+                style={{
+                  marginLeft: "auto",
+                  fontSize: 10, padding: "3px 10px", borderRadius: 6, cursor: "pointer",
+                  border: `1px solid ${showHotspots ? "#ef4444" : "rgba(255,255,255,0.15)"}`,
+                  background: showHotspots ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.04)",
+                  color: showHotspots ? "#ef4444" : "rgba(255,255,255,0.4)",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                {showHotspots ? "◉" : "○"} CITATION ZONES
+              </button>
+            )}
           </div>
 
           {selectedNeighborhood && <>
@@ -1240,6 +1287,8 @@ export default function App() {
               onSelectMeter={handleSelectMeter}
               selectedMeter={selectedMeter}
               userLocation={userLocation}
+              hotspots={hotspots}
+              showHotspots={showHotspots}
             />
 
               {/* Stats row — sourced from mapMeters (full area data from API) */}
