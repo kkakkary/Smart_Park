@@ -1,29 +1,12 @@
-# 🅿️ SD Smart Park
-### Claude AI × City of San Diego Open Data Hackathon
+# SD Smart Park
 
----
-
-## Team
-
-**Team Name:** SD Smart Park
-
-| Name | Role |
-|---|---|
-| Rami Ariss | Project Lead |
-| Kevin Kakkary | Senior Vibe Coder |
-| Christian Miramontes | Junior Vibe Analyst |
-
----
-
-## Problem Statement
-
-Parking in San Diego is a daily frustration — drivers circle blocks wasting time and fuel, often getting ticketed in high-enforcement zones they weren't aware of. The City of San Diego publishes years of parking meter transaction and citation data, but it's raw and inaccessible to the average resident. There's no tool that turns this public data into actionable parking guidance. SD Smart Park solves this by combining historical occupancy patterns with citation risk analysis and surfacing it through a natural language AI interface anyone can use.
+An AI-powered parking recommendation tool for San Diego. Describe where you're going in plain English and get real, data-backed guidance on where to park — including citation risk.
 
 ---
 
 ## What It Does
 
-SD Smart Park lets you describe where you're going in plain English — *"Padres game tonight"* or *"dinner in Little Italy"* — and instantly shows which nearby parking meters are historically most available at that time, which zones carry high citation risk, and a Claude-powered recommendation with specific reasoning. The app uses City of San Diego meter transaction data to model per-meter availability by day-of-week and hour, overlaid on an interactive map with color-coded availability indicators.
+SD Smart Park lets you describe your destination — *"Padres game tonight"* or *"dinner in Little Italy"* — and instantly shows which nearby parking meters are historically most available at that time, which zones carry high citation risk, and a Claude-powered recommendation with specific reasoning. Built on City of San Diego meter transaction data, the app models per-meter availability by day-of-week and hour, overlaid on an interactive map with color-coded indicators.
 
 ---
 
@@ -64,12 +47,11 @@ poetry run python scripts/preprocess.py
 
 ### 2. Backend (Python)
 ```bash
-# Start backend
 cp .env.example .env  # then fill in your Anthropic API key
 poetry run uvicorn backend.main:app --reload --port 8000
 ```
 
-### 2. Frontend (npm, separate)
+### 3. Frontend (npm, separate terminal)
 
 ```bash
 cd frontend
@@ -81,7 +63,7 @@ Open http://localhost:5173
 
 ---
 
-### Notes on preprocessing
+### Notes on Preprocessing
 
 `preprocess.py` checks for `data/meter_temporal_occupancy.csv` first. If found and valid, it builds `meter_locations.json` and `availability_scores.json` locally — no downloads needed. Citation hotspots are always fetched from the SODA API.
 
@@ -106,9 +88,9 @@ All data is public domain (PDDL license) via City of San Diego Open Data Portal.
 
 ## How Availability Is Computed
 
-For each meter, we compute average transaction volume broken down by **(day_of_week × hour)**. High transaction volume = high occupancy = **low availability**. We normalize within each time bucket so the score is relative to the busiest meters in that time slot.
+For each meter, average transaction volume is computed by **(day_of_week × hour)**. High transaction volume = high occupancy = **low availability**. Scores are normalized within each time bucket relative to the busiest meters in that slot.
 
-The result: `meter_id → {mon_9am: 0.72, mon_10am: 0.81, ...}`
+Result: `meter_id → {mon_9am: 0.72, mon_10am: 0.81, ...}`
 
 This is **predictive**, not live — framed honestly as "historically X% likely available."
 
@@ -139,29 +121,17 @@ GET /health
 
 ---
 
-## Demo Script (for judges)
-
-1. Select **Gaslamp Quarter**
-2. Type: `"Padres game tonight"`
-3. Map lights up — green = likely available, red = usually full
-4. Claude panel: specific street recommendation + citation warning + free parking tip
-5. Click any meter → shows availability sparkline across the day
-
----
-
 ## Tech Stack
 
 | Layer | Tool |
 |---|---|
 | Data prep | Python + pandas |
 | Backend | FastAPI + Anthropic SDK |
-| Frontend | React + Tailwind (CDN) |
-| Maps | SVG (no API key needed for demo) |
+| Frontend | React + Vite |
+| Maps | react-leaflet |
 | AI | Claude Sonnet |
 | Data | City of San Diego SODA API |
 
 ---
 
-## Hackathon
-
-Built at the Claude Community × City of San Diego Hackathon 2025
+Built by [Kevin Kakkary](https://github.com/kkakkary)
