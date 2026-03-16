@@ -836,6 +836,8 @@ export default function App() {
   const [userLocation, setUserLocation] = useState(null); // { lat, lon, label }
   const [hotspots, setHotspots] = useState([]);
   const [showHotspots, setShowHotspots] = useState(false);
+  const [leftWidth, setLeftWidth] = useState(380);
+  const isDragging = useRef(false);
 
   const handleLocationSelect = useCallback(async (loc) => {
     setUserLocation(loc);
@@ -1036,14 +1038,17 @@ export default function App() {
       <div style={{
         display: "flex", flex: 1,
         flexDirection: window.innerWidth < 900 ? "column" : "row",
+        overflow: "hidden",
       }}>
         {/* Left Panel */}
         <div style={{
-          width: window.innerWidth < 900 ? "100%" : 380,
+          width: window.innerWidth < 900 ? "100%" : leftWidth,
+          minWidth: 280, maxWidth: "70vw",
           borderRight: "1px solid rgba(255,255,255,0.07)",
           padding: "20px",
           display: "flex", flexDirection: "column", gap: 16,
           overflowY: "auto",
+          flexShrink: 0,
         }}>
           {/* Location Search — top of panel */}
           <div>
@@ -1278,6 +1283,31 @@ export default function App() {
           )}
         </div>
 
+        {/* Resize handle */}
+        <div
+          onMouseDown={(e) => {
+            isDragging.current = true;
+            const startX = e.clientX;
+            const startW = leftWidth;
+            const onMove = (ev) => {
+              if (!isDragging.current) return;
+              const delta = ev.clientX - startX;
+              setLeftWidth(Math.min(Math.max(startW + delta, 280), window.innerWidth * 0.7));
+            };
+            const onUp = () => { isDragging.current = false; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+          }}
+          style={{
+            width: 6, cursor: "col-resize", flexShrink: 0,
+            background: "rgba(255,255,255,0.04)",
+            borderLeft: "1px solid rgba(255,255,255,0.06)",
+            borderRight: "1px solid rgba(255,255,255,0.06)",
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.background = "rgba(59,130,246,0.25)"}
+          onMouseLeave={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
+        />
         {/* Right Panel — Map */}
         <div style={{
           flex: 1, padding: "20px",
