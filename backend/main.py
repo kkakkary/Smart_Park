@@ -265,6 +265,155 @@ class ChatQuery(BaseModel):
     history: Optional[list] = []  # list of {role, content} for multi-turn
 
 
+# ── Agentic chat helpers ───────────────────────────────────────────────────────
+
+def compute_area_stats(dow: int, hour: int) -> list:
+    """Aggregate per-area availability and citation stats from in-memory data."""
+    from collections import defaultdict
+    buckets = defaultdict(lambda: {"availabilities": [], "citation_probs": [], "avg_fines": []})
+    for meter in METERS:
+        area = meter.get("area") or "Unknown"
+        mid = meter["meter_id"]
+        avail = get_availability(mid, dow, hour)
+        cit_prob, avg_fine = get_citation_data(mid)
+        buckets[area]["availabilities"].append(avail)
+        if cit_prob > 0:
+            buckets[area]["citation_probs"].append(cit_prob)
+            buckets[area]["avg_fines"].append(avg_fine)
+
+    result = []
+    for area, data in buckets.items():
+        avails = data["availabilities"]
+        cits   = data["citation_probs"]
+        fines  = data["avg_fines"]
+        result.append({
+            "area": area,
+            "meter_count": len(avails),
+            "avg_availability": round(sum(avails) / len(avails), 3),
+            "avg_citation_prob": round(sum(cits) / len(cits), 3) if cits else 0.0,
+            "avg_fine": round(sum(fines) / len(fines), 2) if fines else 0.0,
+        })
+    return sorted(result, key=lambda x: -x["avg_availability"])
+
+
+CHAT_TOOLS = [
+    {
+        "name": "get_city_overview",
+        "description": "Get availability and citation stats for every neighbourhood in San Diego at a given day/time. Use this to compare areas or answer city-wide questions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dow":  {"type": "integer", "description": "Day of week 0=Mon … 6=Sun. Omit to use current time."},
+                "hour": {"type": "integer", "description": "Hour 0-23. Omit to use current time."},
+            },
+        },
+    },
+    {
+        "name": "get_top_citation_zones",
+        "description": "Return the neighbourhoods and specific grid zones with the highest citation risk, ranked by enforcement probability.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max results to return (default 10)."},
+            },
+        },
+    },
+    {
+        "name": "get_area_details",
+        "description": "Deep-dive stats for a specific neighbourhood: top available meters, highest-risk meters, averages.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "area_name": {"type": "string", "description": "Neighbourhood name, e.g. 'Gaslamp', 'Little Italy'."},
+                "dow":  {"type": "integer", "description": "Day of week 0-6. Omit for current."},
+                "hour": {"type": "integer", "description": "Hour 0-23. Omit for current."},
+            },
+            "required": ["area_name"],
+        },
+    },
+    {
+        "name": "get_best_parking_citywide",
+        "description": "Find the best individual parking meters anywhere in San Diego, sorted by availability or lowest citation risk.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dow":     {"type": "integer", "description": "Day of week 0-6. Omit for current."},
+                "hour":    {"type": "integer", "description": "Hour 0-23. Omit for current."},
+                "limit":   {"type": "integer", "description": "Number of results (default 10)."},
+                "sort_by": {"type": "string",  "description": "'availability' (default) or 'low_risk'."},
+            },
+        },
+    },
+]
+
+
+def execute_tool(name: str, inputs: dict) -> dict:
+    now  = datetime.now()
+    dow  = inputs.get("dow",  now.weekday())
+    hour = inputs.get("hour", now.hour)
+
+    if name == "get_city_overview":
+        stats = compute_area_stats(dow, hour)
+        return {"areas": stats, "dow": dow, "hour": hour, "total_meters": len(METERS)}
+
+    if name == "get_top_citation_zones":
+        limit = inputs.get("limit", 10)
+        stats = compute_area_stats(dow, hour)
+        by_risk = sorted(stats, key=lambda x: -x["avg_citation_prob"])
+        top_hotspots = sorted(HOTSPOTS, key=lambda h: -h["density"])[:limit]
+        return {"highest_risk_areas": by_risk[:limit], "top_hotspot_cells": top_hotspots}
+
+    if name == "get_area_details":
+        area_name = inputs.get("area_name", "")
+        area_meters = [m for m in METERS if area_name.lower() in (m.get("area") or "").lower()]
+        if not area_meters:
+            return {"error": f"No meters found for area '{area_name}'. Try get_city_overview to see valid area names."}
+        enriched = []
+        for m in area_meters:
+            mid = m["meter_id"]
+            avail = get_availability(mid, dow, hour)
+            cit_prob, avg_fine = get_citation_data(mid)
+            enriched.append(sanitize({**m, "availability": avail, "citation_prob": cit_prob, "avg_fine": avg_fine}))
+        enriched.sort(key=lambda x: -(x.get("availability") or 0))
+        avg_avail = sum(m["availability"] for m in enriched) / len(enriched)
+        cit_vals  = [m["citation_prob"] for m in enriched if (m.get("citation_prob") or 0) > 0]
+        avg_cit   = sum(cit_vals) / len(cit_vals) if cit_vals else 0
+        return {
+            "area": area_name,
+            "meter_count": len(enriched),
+            "avg_availability": round(avg_avail, 3),
+            "avg_citation_prob": round(avg_cit, 3),
+            "top_available_meters": enriched[:5],
+            "highest_risk_meters": sorted(enriched, key=lambda x: -(x.get("citation_prob") or 0))[:5],
+        }
+
+    if name == "get_best_parking_citywide":
+        limit   = inputs.get("limit", 10)
+        sort_by = inputs.get("sort_by", "availability")
+        enriched = []
+        for m in METERS:
+            mid = m["meter_id"]
+            avail = get_availability(mid, dow, hour)
+            cit_prob, avg_fine = get_citation_data(mid)
+            enriched.append(sanitize({
+                "meter_id": mid,
+                "area": m.get("area", ""),
+                "street_address": m.get("street_address", ""),
+                "zone": m.get("zone", ""),
+                "lat": m.get("lat"), "lon": m.get("lon"),
+                "availability": avail,
+                "citation_prob": cit_prob,
+                "avg_fine": avg_fine,
+            }))
+        if sort_by == "low_risk":
+            enriched.sort(key=lambda x: (x.get("citation_prob") or 0))
+        else:
+            enriched.sort(key=lambda x: -(x.get("availability") or 0))
+        return {"meters": enriched[:limit], "sort_by": sort_by, "dow": dow, "hour": hour}
+
+    return {"error": f"Unknown tool: {name}"}
+
+
 @app.post("/resolve-location")
 async def resolve_location(req: LocationQuery):
     """Use Claude to extract destination coordinates and optional day/time, then find nearest area."""
@@ -415,3 +564,51 @@ def meters_in_area(lat: float, lon: float, radius_m: int = 1000, limit: int = 40
                    dow: Optional[int] = None, hour: Optional[int] = None):
     """Return all meters in an area (for map rendering without AI)."""
     return find_nearby_meters(lat, lon, radius_m, limit=min(limit, 500), dow=dow, hour=hour)
+
+
+@app.post("/chat")
+async def chat(req: ChatQuery):
+    """Agentic chat endpoint — Claude uses tools to query live parking data and answer any question."""
+    SYSTEM = (
+        "You are SD Smart Park, an AI analyst with access to real San Diego parking data "
+        f"covering {len(METERS):,} meters across {len(AREAS)} neighbourhoods. "
+        "Use your tools to look up data before answering — never guess numbers. "
+        "Be concise, specific, and conversational. When you cite stats, pull them from tool results."
+    )
+
+    messages = list(req.history) + [{"role": "user", "content": req.message}]
+
+    for _ in range(6):  # max 6 tool-use rounds
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=SYSTEM,
+            tools=CHAT_TOOLS,
+            messages=messages,
+        )
+
+        if response.stop_reason == "end_turn":
+            break
+
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = execute_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result),
+                    })
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            break
+
+    text = next((b.text for b in response.content if hasattr(b, "text")), "No response generated.")
+    # Return updated history (stripped of tool internals) for multi-turn use
+    history_out = list(req.history) + [
+        {"role": "user", "content": req.message},
+        {"role": "assistant", "content": text},
+    ]
+    return {"response": text, "history": history_out}

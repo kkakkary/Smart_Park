@@ -702,8 +702,116 @@ function MeterCard({ meter, isSelected, onClick, selectedDow, selectedHour }) {
   );
 }
 
+// ── Chat Panel ────────────────────────────────────────────────────────────────
+function ChatPanel() {
+  const [input, setInput] = useState("");
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+
+  const SUGGESTIONS = [
+    "Which area has the highest citation risk?",
+    "Where's the best parking right now?",
+    "How risky is parking in Gaslamp on Friday night?",
+    "Which neighbourhoods have the most available parking on weekends?",
+    "What's the safest area to park with the lowest fine risk?",
+  ];
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [history, loading]);
+
+  const send = async (text) => {
+    const msg = (text || input).trim();
+    if (!msg) return;
+    setInput("");
+    const newHistory = [...history, { role: "user", content: msg }];
+    setHistory(newHistory);
+    setLoading(true);
+    try {
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg, history }),
+      });
+      const data = await res.json();
+      setHistory(data.history);
+    } catch {
+      setHistory([...newHistory, { role: "assistant", content: "Something went wrong. Is the backend running?" }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
+      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", letterSpacing: "0.08em" }}>
+        ASK CLAUDE — POWERED BY LIVE SD PARKING DATA
+      </div>
+      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, paddingRight: 4, minHeight: 0 }}>
+        {history.length === 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", marginBottom: 4 }}>Try asking:</div>
+            {SUGGESTIONS.map((s) => (
+              <button key={s} onClick={() => send(s)} style={{
+                textAlign: "left", background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8,
+                padding: "8px 12px", color: "rgba(255,255,255,0.55)", fontSize: 11, cursor: "pointer",
+              }}>{s}</button>
+            ))}
+          </div>
+        )}
+        {history.map((msg, i) => (
+          <div key={i} style={{ display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", gap: 8, alignItems: "flex-start" }}>
+            <div style={{
+              fontSize: 9, padding: "2px 6px", borderRadius: 4, marginTop: 2, flexShrink: 0,
+              background: msg.role === "user" ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.06)",
+              color: msg.role === "user" ? "#60a5fa" : "rgba(255,255,255,0.3)", letterSpacing: "0.06em",
+            }}>{msg.role === "user" ? "YOU" : "AI"}</div>
+            <div style={{
+              flex: 1, padding: "10px 12px", borderRadius: 10, fontSize: 12, lineHeight: 1.65,
+              background: msg.role === "user" ? "rgba(59,130,246,0.1)" : "rgba(255,255,255,0.04)",
+              border: `1px solid ${msg.role === "user" ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.07)"}`,
+              color: msg.role === "user" ? "#bfdbfe" : "#e2e8f0",
+            }}>
+              {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : msg.content}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <div style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, marginTop: 2, background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", letterSpacing: "0.06em" }}>AI</div>
+            <div style={{ padding: "10px 14px", borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: 5, alignItems: "center" }}>
+              {[0, 0.2, 0.4].map((delay) => (
+                <div key={delay} style={{ width: 6, height: 6, borderRadius: "50%", background: "#60a5fa", animation: "pulse 1.2s ease-in-out infinite", animationDelay: `${delay}s` }} />
+              ))}
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
+          placeholder="Ask anything about SD parking..."
+          style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, padding: "9px 12px", color: "#e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit" }}
+        />
+        <button onClick={() => send()} disabled={loading || !input.trim()} style={{
+          padding: "9px 16px", borderRadius: 8, fontSize: 11, cursor: "pointer", letterSpacing: "0.05em",
+          background: loading || !input.trim() ? "rgba(255,255,255,0.05)" : "rgba(59,130,246,0.8)",
+          border: "1px solid rgba(255,255,255,0.1)",
+          color: loading || !input.trim() ? "rgba(255,255,255,0.3)" : "#fff",
+        }}>SEND</button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main App ───────────────────────────────────────────────────────────────────
 export default function App() {
+  const [mode, setMode] = useState("find"); // "find" | "chat"
   const [query, setQuery] = useState("");
   const [areas, setAreas] = useState([]);
   const [selectedNeighborhood, setSelectedNeighborhood] = useState(null);
@@ -980,8 +1088,23 @@ export default function App() {
           borderRight: "1px solid rgba(255,255,255,0.07)",
           padding: "20px",
           display: "flex", flexDirection: "column", gap: 16,
-          overflowY: "auto",
+          overflowY: mode === "find" ? "auto" : "hidden",
         }}>
+          {/* Mode switcher */}
+          <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: 4 }}>
+            {[["find", "FIND PARKING"], ["chat", "ASK CLAUDE"]].map(([m, label]) => (
+              <button key={m} onClick={() => setMode(m)} style={{
+                flex: 1, padding: "7px 0", borderRadius: 6, fontSize: 10, letterSpacing: "0.06em",
+                cursor: "pointer", border: "none",
+                background: mode === m ? "rgba(59,130,246,0.7)" : "transparent",
+                color: mode === m ? "#fff" : "rgba(255,255,255,0.4)",
+                fontFamily: "inherit",
+              }}>{label}</button>
+            ))}
+          </div>
+
+          {mode === "chat" && <ChatPanel />}
+          {mode === "find" && <>
           {/* Location Search — top of panel */}
           <div>
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginBottom: 8, letterSpacing: "0.08em" }}>
@@ -1239,6 +1362,7 @@ export default function App() {
               </div>
             </div>
           )}
+          </>}
         </div>
 
         {/* Right Panel — Map */}

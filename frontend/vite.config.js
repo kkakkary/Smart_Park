@@ -14,6 +14,7 @@ export default defineConfig({
       "/resolve-location": "http://localhost:8000",
       "/refresh": "http://localhost:8000",
       "/citation-hotspots": "http://localhost:8000",
+      "/chat": "http://localhost:8000",
     },
   },
 });
