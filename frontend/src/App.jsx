@@ -1235,6 +1235,20 @@ export default function App() {
                     ))}
                   </span>
                 )}
+                <span style={{ marginLeft: "auto" }}>
+                  <button
+                    onClick={() => { setChatHistory([]); setMeters([]); setResolvedLocation(null); }}
+                    style={{
+                      background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
+                      color: "rgba(255,255,255,0.5)", fontSize: 9, padding: "2px 8px",
+                      borderRadius: 4, cursor: "pointer", letterSpacing: "0.05em",
+                    }}
+                    onMouseEnter={(e) => { e.target.style.background = "rgba(255,255,255,0.12)"; e.target.style.color = "#fff"; }}
+                    onMouseLeave={(e) => { e.target.style.background = "rgba(255,255,255,0.06)"; e.target.style.color = "rgba(255,255,255,0.5)"; }}
+                  >
+                    NEW CHAT
+                  </button>
+                </span>
               </div>
               {chatHistory.map((msg, i) => (
                 <div key={i} style={{

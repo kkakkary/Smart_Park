@@ -1,0 +1,12 @@
+node_modules/
+frontend/node_modules/
+.env
+.git
+.gitignore
+__pycache__
+*.pyc
+.venv
+.mypy_cache
+.ruff_cache
+*.csv
+.claude/

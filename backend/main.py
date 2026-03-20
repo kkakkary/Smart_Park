@@ -18,8 +18,11 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
+from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import anthropic
 from dotenv import load_dotenv
@@ -660,3 +663,17 @@ async def chat(req: ChatQuery):
         "query_time": state.get("query_time"),
         "location": state.get("location"),
     }
+
+
+# ── Serve frontend (production) ──────────────────────────────────────────────
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if FRONTEND_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="static")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve the React SPA — any non-API path returns index.html."""
+        file_path = FRONTEND_DIR / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(FRONTEND_DIR / "index.html")
