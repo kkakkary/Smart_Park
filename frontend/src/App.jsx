@@ -1163,7 +1163,7 @@ export default function App() {
                 }}
               />
               <button
-                onClick={handleSearch}
+                onClick={() => handleSearch()}
                 disabled={loading || !query.trim()}
                 style={{
                   padding: "10px 16px",
